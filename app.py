@@ -3,9 +3,8 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import sqlite3
-from datetime import datetime, date, timedelta
+from datetime import datetime
 import plotly.express as px
-import plotly.graph_objects as go
 
 # Page config
 st.set_page_config(
@@ -38,94 +37,106 @@ def init_db():
 
 init_db()
 
-@st.cache_data(ttl=3600)  # Cache for 1 hour
-def fetch_all_stock_data(symbols, start_date):
-    """Fetch historical data for all symbols at once"""
-    try:
-        if isinstance(start_date, (date, datetime)):
-            start_date = start_date.strftime('%Y-%m-%d')
-        
-        data = yf.download(
-            tickers=symbols,
-            start=start_date,
-            interval='1d',
-            group_by='ticker',
-            auto_adjust=True
-        )
-        
-        # Handle single vs multiple symbols
-        if len(symbols) == 1:
-            return pd.DataFrame({'Close': data['Close']})
-        return data.xs('Close', axis=1, level=1)
+@st.cache_data(ttl=3600)
+def fetch_all_stock_data(symbols):
+    """Fetch historical data for all symbols."""
+    max_retries = 3
+    retry_count = 0
+    start_date = '2024-01-01'
+
+    while retry_count < max_retries:
+        try:
+            data = yf.download(
+                tickers=symbols,
+                start=start_date,
+                interval='1d',
+                group_by='ticker',
+                auto_adjust=True
+            )
             
-    except Exception as e:
-        st.error(f"Error fetching data: {str(e)}")
-        return pd.DataFrame()
-
-def calculate_returns(stock_data, positions):
-    """Calculate returns for all portfolios using pre-fetched data"""
-    player_positions = {}
-    for pos in positions:
-        if pos['player'] not in player_positions:
-            player_positions[pos['player']] = {}
-        player_positions[pos['player']][pos['symbol']] = {
-            'allocation': pos['allocation'],
-            'entry_price': pos['entry_price']
-        }
-    
-    # Calculate returns for each player
-    all_returns = []
-    for player, pos_details in player_positions.items():
-        player_returns = pd.Series(0.0, index=stock_data.index)
-        for symbol, details in pos_details.items():
-            if symbol in stock_data.columns:
-                stock_returns = ((stock_data[symbol] - details['entry_price']) / 
-                               details['entry_price']) * details['allocation'] * 100
-                player_returns += stock_returns
+            # Handle single vs multiple symbols
+            if len(symbols) == 1:
+                close_data = pd.DataFrame({'Close': data['Close']})
+            else:
+                close_data = data.xs('Close', axis=1, level=1)
+            
+            close_data = close_data.round(2)
+            return close_data
         
-        returns_df = pd.DataFrame({
-            'player': player,
-            'return_pct': player_returns
-        })
-        all_returns.append(returns_df)
-    
-    if not all_returns:
-        return pd.DataFrame()
-    
-    combined_df = pd.concat(all_returns).reset_index()
-    combined_df.rename(columns={'index': 'Date'}, inplace=True)
-    return combined_df
+        except Exception as e:
+            retry_count += 1
+            if retry_count >= max_retries:
+                print(f"Failed after {max_retries} attempts: {str(e)}")
+                return pd.DataFrame()
+            print(f"Retrying ({retry_count}/{max_retries})...")
 
-def calculate_current_positions(stock_data, positions):
-    """Calculate current portfolio details using pre-fetched data"""
+def build_portfolio_dataframe(stock_data, positions):
+    """Build a single DataFrame with current portfolio details."""
     if stock_data.empty:
         return pd.DataFrame()
     
-    current_prices = stock_data.iloc[-1]
-    
-    returns_data = []
+    portfolio_data = []
     for pos in positions:
-        if pos['symbol'] in current_prices.index:
-            current_price = current_prices[pos['symbol']]
-            return_pct = ((current_price - pos['entry_price']) / pos['entry_price']) * pos['allocation']
-            returns_data.append({
-                'player': pos['player'],
-                'symbol': pos['symbol'],
-                'allocation': pos['allocation'],
-                'entry_price': pos['entry_price'],
-                'current_price': current_price,
-                'return_pct': return_pct * 100
+        symbol = pos['symbol']
+        if symbol in stock_data.columns:
+            entry_price = pos['entry_price']
+            allocation = pos['allocation'] * 1000  # Convert allocation to dollar value
+            shares_bought = allocation / entry_price  # Fractional shares
+            current_price = stock_data[symbol].iloc[-1]
+            current_value = shares_bought * current_price
+            dollar_return = current_value - allocation
+            
+            portfolio_data.append({
+                'Player': pos['player'],
+                'Stock': symbol,
+                'Entry Price': entry_price,
+                'Allocation ($)': allocation,
+                'Current Price': current_price,
+                'Current Value ($)': current_value,
+                'Dollar Amount Return': dollar_return
             })
     
-    return pd.DataFrame(returns_data)
+    return pd.DataFrame(portfolio_data)
 
-# Sidebar controls
-with st.sidebar:
-    st.header("Controls")
-    if st.button("🔄 Refresh Data"):
-        st.cache_data.clear()
+def calculate_historical_dollar_returns(stock_data, positions):
+    """Calculate aggregated historical dollar values for each player."""
+    stock_data.index = pd.to_datetime(stock_data.index)  # Ensure index is pandas.Timestamp
     
-    days_to_show = st.slider("Days to show", 7, 90, 30)
+    historical_data = []
+    for pos in positions:
+        symbol = pos['symbol']
+        entry_date = pd.to_datetime(pos['entry_date'])  # Ensure entry_date is pandas.Timestamp
+        
+        if symbol in stock_data.columns:
+            # Handle missing entry_date by finding the nearest available date
+            if entry_date not in stock_data.index:
+                closest_index = stock_data.index.get_indexer([entry_date], method='nearest')[0]
+                closest_date = stock_data.index[closest_index]
+            else:
+                closest_date = entry_date
+            
+            entry_price = stock_data.loc[closest_date, symbol]
+            allocation = pos['allocation'] * 1000  # Initial allocation in dollars
+            shares_bought = allocation / entry_price  # Fractional shares
+            
+            stock_prices = stock_data[symbol]
+            for date, price in stock_prices.items():
+                current_value = shares_bought * price
+                dollar_return = current_value - allocation
+                historical_data.append({
+                    'Date': date,
+                    'Player': pos['player'],
+                    'Dollar Value': current_value,
+                    'Dollar Return': dollar_return
+                })
+    
+    historical_df = pd.DataFrame(historical_data)
+    aggregated_df = historical_df.groupby(['Date', 'Player'], as_index=False).sum()
+    return aggregated_df
+
+
+
+
 
 # Get positions from database
 conn = get_db_connection()
@@ -133,108 +144,70 @@ positions = conn.execute('SELECT * FROM positions').fetchall()
 conn.close()
 
 if positions:
-    # Get unique symbols and determine start date
     all_symbols = list(set(pos['symbol'] for pos in positions))
-    start_date = date.today() - timedelta(days=days_to_show)
     
-    # Fetch all stock data once
     with st.spinner('Fetching market data...'):
-        stock_data = fetch_all_stock_data(all_symbols, start_date)
+        stock_data = fetch_all_stock_data(all_symbols)
     
     if not stock_data.empty:
-        # Calculate all metrics using the same stock data
-        historical_df = calculate_returns(stock_data, positions)
-        current_returns_df = calculate_current_positions(stock_data, positions)
+        portfolio_df = build_portfolio_dataframe(stock_data, positions)
+        historical_df = calculate_historical_dollar_returns(stock_data, positions)
         
-        # Main content
         tab1, tab2, tab3 = st.tabs(["📊 Leaderboard", "🔍 Portfolio Details", "📈 Performance Charts"])
 
         with tab1:
             st.header("Current Rankings")
-            
-            if not current_returns_df.empty:
-                # Calculate total returns per player
-                leaderboard = current_returns_df.groupby('player')['return_pct'].sum().reset_index()
-                leaderboard = leaderboard.sort_values('return_pct', ascending=False)
-                
-                # Create ranking table with formatting
-                for i, row in leaderboard.iterrows():
-                    col1, col2 = st.columns([3, 1])
-                    with col1:
-                        st.write(f"**{i+1}. {row['player']}**")
-                    with col2:
-                        color = "green" if row['return_pct'] >= 0 else "red"
-                        st.markdown(f"<h3 style='color: {color};text-align: right'>{row['return_pct']:.2f}%</h3>", 
-                                  unsafe_allow_html=True)
-                    st.divider()
-                
-                # Historical performance chart
-                st.subheader("Performance Trends")
-                if not historical_df.empty:
-                    fig = px.line(historical_df, 
-                                 x='Date', 
-                                 y='return_pct',
-                                 color='player',
-                                 title='Portfolio Performance Over Time',
-                                 labels={'Date': 'Date', 'return_pct': 'Return %'})
-                    
-                    fig.update_traces(mode='lines+markers')
-                    fig.update_layout(
-                        hovermode='x unified',
-                        yaxis_title="Return %",
-                        xaxis_title="Date"
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
+            leaderboard = (
+                portfolio_df.groupby('Player', as_index=False)
+                .agg({'Dollar Amount Return': 'sum'})
+                .sort_values('Dollar Amount Return', ascending=False)
+            )
+            for i, row in leaderboard.iterrows():
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.write(f"**{i+1}. {row['Player']}**")
+                with col2:
+                    st.markdown(f"<h3 style='text-align: right'>${row['Dollar Amount Return']:.2f}</h3>", unsafe_allow_html=True)
+                st.divider()
 
         with tab2:
             st.header("Portfolio Details")
-            if not current_returns_df.empty:
-                for player in current_returns_df['player'].unique():
-                    st.subheader(player)
-                    player_portfolio = current_returns_df[current_returns_df['player'] == player]
-                    
-                    for _, pos in player_portfolio.iterrows():
-                        col1, col2, col3 = st.columns([2, 2, 1])
-                        with col1:
-                            st.write(f"**{pos['symbol']}** ({pos['allocation']*100:.0f}%)")
-                        with col2:
-                            st.write(f"${pos['entry_price']:.2f} → ${pos['current_price']:.2f}")
-                        with col3:
-                            color = "green" if pos['return_pct'] >= 0 else "red"
-                            st.markdown(f"<p style='color: {color};text-align: right'>{pos['return_pct']:.2f}%</p>", 
-                                      unsafe_allow_html=True)
-                    st.divider()
+            for player in portfolio_df['Player'].unique():
+                st.subheader(player)
+                player_portfolio = portfolio_df[portfolio_df['Player'] == player]
+                st.dataframe(player_portfolio)
 
         with tab3:
             st.header("Performance Charts")
-            if not current_returns_df.empty:
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # Total Returns Bar Chart
-                    fig_returns = px.bar(leaderboard, 
-                                       x='player', 
-                                       y='return_pct',
-                                       title='Total Returns by Player',
-                                       labels={'player': 'Player', 'return_pct': 'Return %'},
-                                       color='return_pct',
-                                       color_continuous_scale=['red', 'green'])
-                    st.plotly_chart(fig_returns, use_container_width=True)
-                
-                # Portfolio Composition Charts
-                st.subheader("Portfolio Compositions")
-                for player in current_returns_df['player'].unique():
-                    player_portfolio = current_returns_df[current_returns_df['player'] == player]
-                    
-                    fig_composition = px.pie(player_portfolio, 
-                                           values='allocation',
-                                           names='symbol',
-                                           title=f"{player}'s Portfolio Allocation")
-                    st.plotly_chart(fig_composition, use_container_width=True)
+            
+            st.subheader("Historical Dollar Returns Over Time")
+            if not historical_df.empty:
+                fig_line = px.line(
+                    historical_df,
+                    x='Date',
+                    y='Dollar Value',
+                    color='Player',
+                    title='Historical Dollar Values Over Time',
+                    labels={'Date': 'Date', 'Dollar Value': 'Total Portfolio Value ($)'}
+                )
+                fig_line.update_traces(mode='lines+markers')
+                st.plotly_chart(fig_line, use_container_width=True)
 
+            
+            st.subheader("Total Dollar Returns by Player")
+            fig_bar = px.bar(
+                portfolio_df,
+                x='Player',
+                y='Dollar Amount Return',
+                title='Total Dollar Returns by Player',
+                labels={'Player': 'Player', 'Dollar Amount Return': 'Dollar Return'},
+                color='Dollar Amount Return',
+                color_continuous_scale=['red', 'green']
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
 else:
     st.warning("No positions found in the database. Please add some positions first.")
-    
+
 # Schema for reference
 if st.sidebar.checkbox("Show Database Schema"):
     st.sidebar.code("""
