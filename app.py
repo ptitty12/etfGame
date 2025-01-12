@@ -24,12 +24,13 @@ def init_db():
     conn = get_db_connection()
     conn.execute('''
         CREATE TABLE IF NOT EXISTS positions (
-            id INTEGER PRIMARY KEY,
-            player TEXT NOT NULL,
-            symbol TEXT NOT NULL,
-            allocation REAL NOT NULL,
-            entry_price REAL NOT NULL,
-            entry_date DATE NOT NULL
+            Player TEXT,
+            Ticker TEXT,
+            selfSub REAL,
+            etfPercent REAL,
+            entryPrice REAL,
+            Shares REAL,
+            entryValue REAL
         )
     ''')
     conn.commit()
@@ -77,20 +78,19 @@ def build_portfolio_dataframe(stock_data, positions):
     
     portfolio_data = []
     for pos in positions:
-        symbol = pos['symbol']
+        symbol = pos['Ticker']
         if symbol in stock_data.columns:
-            entry_price = pos['entry_price']
-            allocation = pos['allocation'] * 1000  # Convert allocation to dollar value
-            shares_bought = allocation / entry_price  # Fractional shares
+            shares = pos['Shares']
+            entry_price = pos['entryPrice']
             current_price = stock_data[symbol].iloc[-1]
-            current_value = shares_bought * current_price
-            dollar_return = current_value - allocation
+            current_value = shares * current_price
+            dollar_return = current_value - pos['entryValue']
             
             portfolio_data.append({
-                'Player': pos['player'],
+                'Player': pos['Player'],
                 'Stock': symbol,
                 'Entry Price': entry_price,
-                'Allocation ($)': allocation,
+                'Shares': shares,
                 'Current Price': current_price,
                 'Current Value ($)': current_value,
                 'Dollar Amount Return': dollar_return
@@ -104,28 +104,17 @@ def calculate_historical_dollar_returns(stock_data, positions):
     
     historical_data = []
     for pos in positions:
-        symbol = pos['symbol']
-        entry_date = pd.to_datetime(pos['entry_date'])  # Ensure entry_date is pandas.Timestamp
+        symbol = pos['Ticker']
+        shares = pos['Shares']
         
         if symbol in stock_data.columns:
-            # Handle missing entry_date by finding the nearest available date
-            if entry_date not in stock_data.index:
-                closest_index = stock_data.index.get_indexer([entry_date], method='nearest')[0]
-                closest_date = stock_data.index[closest_index]
-            else:
-                closest_date = entry_date
-            
-            entry_price = stock_data.loc[closest_date, symbol]
-            allocation = pos['allocation'] * 1000  # Initial allocation in dollars
-            shares_bought = allocation / entry_price  # Fractional shares
-            
             stock_prices = stock_data[symbol]
             for date, price in stock_prices.items():
-                current_value = shares_bought * price
-                dollar_return = current_value - allocation
+                current_value = shares * price
+                dollar_return = current_value - pos['entryValue']
                 historical_data.append({
                     'Date': date,
-                    'Player': pos['player'],
+                    'Player': pos['Player'],
                     'Dollar Value': current_value,
                     'Dollar Return': dollar_return
                 })
@@ -135,16 +124,13 @@ def calculate_historical_dollar_returns(stock_data, positions):
     return aggregated_df
 
 
-
-
-
 # Get positions from database
 conn = get_db_connection()
 positions = conn.execute('SELECT * FROM positions').fetchall()
 conn.close()
 
 if positions:
-    all_symbols = list(set(pos['symbol'] for pos in positions))
+    all_symbols = list(set(pos['Ticker'] for pos in positions))
     
     with st.spinner('Fetching market data...'):
         stock_data = fetch_all_stock_data(all_symbols)
@@ -211,20 +197,13 @@ else:
 # Schema for reference
 if st.sidebar.checkbox("Show Database Schema"):
     st.sidebar.code("""
-    CREATE TABLE positions (
-        id INTEGER PRIMARY KEY,
-        player TEXT NOT NULL,
-        symbol TEXT NOT NULL,
-        allocation REAL NOT NULL,
-        entry_price REAL NOT NULL,
-        entry_date DATE NOT NULL
+    CREATE TABLE IF NOT EXISTS positions (
+        Player TEXT,
+        Ticker TEXT,
+        selfSub REAL,
+        etfPercent REAL,
+        entryPrice REAL,
+        Shares REAL,
+        entryValue REAL
     );
-    """)
-    
-    st.sidebar.markdown("Example INSERT statement:")
-    st.sidebar.code("""
-    INSERT INTO positions 
-    (player, symbol, allocation, entry_price, entry_date)
-    VALUES 
-    ('Player1', 'AAPL', 0.5, 180.5, '2024-01-10');
     """)
