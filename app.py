@@ -13,11 +13,18 @@ st.set_page_config(
     layout="wide"
 )
 
+# Add refresh button in the sidebar
+if st.sidebar.button('🔄 Refresh Data'):
+    st.cache_data.clear()
+    st.rerun()
+
+
 # Database connection
 def get_db_connection():
     conn = sqlite3.connect('portfolios.db')
     conn.row_factory = sqlite3.Row
     return conn
+
 
 # Create tables if they don't exist
 def init_db():
@@ -36,7 +43,9 @@ def init_db():
     conn.commit()
     conn.close()
 
+
 init_db()
+
 
 @st.cache_data(ttl=3600)
 def fetch_all_stock_data(symbols):
@@ -44,7 +53,7 @@ def fetch_all_stock_data(symbols):
     max_retries = 3
     start_date = '2024-01-01'
     all_data = pd.DataFrame()
-    
+
     for attempt in range(max_retries):
         try:
             data = yf.download(
@@ -54,30 +63,30 @@ def fetch_all_stock_data(symbols):
                 group_by='ticker',
                 auto_adjust=True
             )
-            
+
             # Handle single vs multiple symbols
             if len(symbols) == 1:
                 close_data = pd.DataFrame({'Close': data['Close']})
             else:
                 close_data = data.xs('Close', axis=1, level=1)
-            
+
             all_data = pd.concat([all_data, close_data], axis=1)
-            
+
             # Find missing symbols
             fetched_symbols = all_data.columns.tolist()
             missing_symbols = [symbol for symbol in symbols if symbol not in fetched_symbols]
-            
+
             if not missing_symbols:
                 return all_data.round(2)  # Return if no missing data
-            
+
             symbols = missing_symbols  # Retry only for missing symbols
-            
+
             print(f"Retrying for missing symbols: {missing_symbols}")
-        
+
         except Exception as e:
             print(f"Attempt {attempt + 1} failed: {str(e)}")
             continue
-    
+    print(all_data)
     return all_data.round(2)  # Return whatever data was fetched
 
 
@@ -85,7 +94,7 @@ def build_portfolio_dataframe(stock_data, positions):
     """Build a single DataFrame with current portfolio details."""
     if stock_data.empty:
         return pd.DataFrame()
-    
+
     portfolio_data = []
     for pos in positions:
         symbol = pos['Ticker']
@@ -95,7 +104,7 @@ def build_portfolio_dataframe(stock_data, positions):
             current_price = stock_data[symbol].iloc[-1]
             current_value = shares * current_price
             dollar_return = current_value - pos['entryValue']
-            
+
             portfolio_data.append({
                 'Player': pos['Player'],
                 'Stock': symbol,
@@ -105,18 +114,19 @@ def build_portfolio_dataframe(stock_data, positions):
                 'Current Value ($)': current_value,
                 'Dollar Amount Return': dollar_return
             })
-    
+
     return pd.DataFrame(portfolio_data)
+
 
 def calculate_historical_dollar_returns(stock_data, positions):
     """Calculate aggregated historical dollar values for each player."""
     stock_data.index = pd.to_datetime(stock_data.index)  # Ensure index is pandas.Timestamp
-    
+
     historical_data = []
     for pos in positions:
         symbol = pos['Ticker']
         shares = pos['Shares']
-        
+
         if symbol in stock_data.columns:
             stock_prices = stock_data[symbol]
             for date, price in stock_prices.items():
@@ -128,7 +138,7 @@ def calculate_historical_dollar_returns(stock_data, positions):
                     'Dollar Value': current_value,
                     'Dollar Return': dollar_return
                 })
-    
+
     historical_df = pd.DataFrame(historical_data)
     aggregated_df = historical_df.groupby(['Date', 'Player'], as_index=False).sum()
     return aggregated_df
@@ -141,14 +151,14 @@ conn.close()
 
 if positions:
     all_symbols = list(set(pos['Ticker'] for pos in positions))
-    
+
     with st.spinner('Fetching market data...'):
         stock_data = fetch_all_stock_data(all_symbols)
-    
+
     if not stock_data.empty:
         portfolio_df = build_portfolio_dataframe(stock_data, positions)
         historical_df = calculate_historical_dollar_returns(stock_data, positions)
-        
+
         tab1, tab2, tab3 = st.tabs(["📊 Leaderboard", "🔍 Portfolio Details", "📈 Performance Charts"])
 
         with tab1:
@@ -161,9 +171,10 @@ if positions:
             for i, row in leaderboard.iterrows():
                 col1, col2 = st.columns([3, 1])
                 with col1:
-                    st.write(f"**{i+1}. {row['Player']}**")
+                    st.write(f"**{i + 1}. {row['Player']}**")
                 with col2:
-                    st.markdown(f"<h3 style='text-align: right'>${row['Dollar Amount Return']:.2f}</h3>", unsafe_allow_html=True)
+                    st.markdown(f"<h3 style='text-align: right'>${row['Dollar Amount Return']:.2f}</h3>",
+                                unsafe_allow_html=True)
                 st.divider()
 
         with tab2:
@@ -175,7 +186,7 @@ if positions:
 
         with tab3:
             st.header("Performance Charts")
-            
+
             st.subheader("Historical Dollar Returns Over Time")
             if not historical_df.empty:
                 fig_line = px.line(
@@ -189,7 +200,6 @@ if positions:
                 fig_line.update_traces(mode='lines+markers')
                 st.plotly_chart(fig_line, use_container_width=True)
 
-            
             st.subheader("Total Dollar Returns by Player")
             fig_bar = px.bar(
                 portfolio_df,
