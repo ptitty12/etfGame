@@ -157,8 +157,6 @@ if positions:
 
     if not stock_data.empty:
         portfolio_df = build_portfolio_dataframe(stock_data, positions)
-        portfolio_df['Dollar Amount Return'] = portfolio_df['Dollar Amount Return'].round(2)
-
         historical_df = calculate_historical_dollar_returns(stock_data, positions)
 
         tab1, tab2, tab3 = st.tabs(["📊 Leaderboard", "🔍 Portfolio Details", "📈 Performance Charts"])
@@ -203,25 +201,14 @@ if positions:
                 st.plotly_chart(fig_line, use_container_width=True)
 
             st.subheader("Total Dollar Returns by Player")
-            colors = ['red' if x < 0 else 'green' for x in portfolio_df['Dollar Amount Return']]
-
             fig_bar = px.bar(
                 portfolio_df,
                 x='Player',
                 y='Dollar Amount Return',
                 title='Total Dollar Returns by Player',
                 labels={'Player': 'Player', 'Dollar Amount Return': 'Dollar Return'},
-                hover_data=['Ticker'],  # Add Ticker to tooltip
-                custom_data=['Ticker']  # Include Ticker in custom data
-            )
-            fig_bar.update_traces(marker_color=colors)
-            fig_bar.update_traces(
-                hovertemplate="<br>".join([
-                    "Player: %{x}",
-                    "Dollar Return: $%{y:,.2f}",
-                    "Ticker: %{customdata[0]}",
-                    "<extra></extra>"
-                ])
+                color='Dollar Amount Return',
+                color_continuous_scale=['red', 'green']
             )
             st.plotly_chart(fig_bar, use_container_width=True)
 else:
