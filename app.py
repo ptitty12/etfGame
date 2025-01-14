@@ -40,12 +40,12 @@ init_db()
 
 @st.cache_data(ttl=3600)
 def fetch_all_stock_data(symbols):
-    """Fetch historical data for all symbols."""
+    """Fetch historical data for all symbols with retries for missing data."""
     max_retries = 3
-    retry_count = 0
     start_date = '2024-01-01'
-
-    while retry_count < max_retries:
+    all_data = pd.DataFrame()
+    
+    for attempt in range(max_retries):
         try:
             data = yf.download(
                 tickers=symbols,
@@ -61,15 +61,25 @@ def fetch_all_stock_data(symbols):
             else:
                 close_data = data.xs('Close', axis=1, level=1)
             
-            close_data = close_data.round(2)
-            return close_data
+            all_data = pd.concat([all_data, close_data], axis=1)
+            
+            # Find missing symbols
+            fetched_symbols = all_data.columns.tolist()
+            missing_symbols = [symbol for symbol in symbols if symbol not in fetched_symbols]
+            
+            if not missing_symbols:
+                return all_data.round(2)  # Return if no missing data
+            
+            symbols = missing_symbols  # Retry only for missing symbols
+            
+            print(f"Retrying for missing symbols: {missing_symbols}")
         
         except Exception as e:
-            retry_count += 1
-            if retry_count >= max_retries:
-                print(f"Failed after {max_retries} attempts: {str(e)}")
-                return pd.DataFrame()
-            print(f"Retrying ({retry_count}/{max_retries})...")
+            print(f"Attempt {attempt + 1} failed: {str(e)}")
+            continue
+    
+    return all_data.round(2)  # Return whatever data was fetched
+
 
 def build_portfolio_dataframe(stock_data, positions):
     """Build a single DataFrame with current portfolio details."""
