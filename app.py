@@ -188,7 +188,7 @@ if positions:
             for i, row in leaderboard.iterrows():
                 col1, col2 = st.columns([3, 1])
                 with col1:
-                    st.write(f"**{i + 1}. {row['Player']}**")
+                    st.write(f"**{row['Player']}**")  # Removed the {i + 1}.
                 with col2:
                     st.markdown(f"<h3 style='text-align: right'>${row['Dollar Amount Return']:.2f}</h3>",
                                 unsafe_allow_html=True)
