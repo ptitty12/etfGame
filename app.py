@@ -51,8 +51,6 @@ init_db()
 import time
 
 @st.cache_data(ttl=3600)
-
-
 def fetch_all_stock_data(symbols):
     """
     1) Download daily OHLCV data for all symbols at once.
