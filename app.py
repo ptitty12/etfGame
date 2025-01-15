@@ -5,6 +5,7 @@ import yfinance as yf
 import sqlite3
 from datetime import datetime
 import plotly.express as px
+import numpy as np
 
 # Page config
 st.set_page_config(
@@ -47,47 +48,65 @@ def init_db():
 init_db()
 
 
+import time
+
 @st.cache_data(ttl=3600)
+
+
 def fetch_all_stock_data(symbols):
-    """Fetch historical data for all symbols with retries for missing data."""
+    """
+    1) Download daily OHLCV data for all symbols at once.
+    2) If 'Open' is missing for a symbol on a given date, fill that day's
+       OHLC with the prior day's 'Close' and set 'Volume' to 0.
+    3) Return a DataFrame with just the 'Close' columns, index=Date, columns=Symbols.
+    """
     max_retries = 3
     start_date = '2024-01-01'
-    all_data = pd.DataFrame()
+    data = None
 
     for attempt in range(max_retries):
         try:
-            data = yf.download(
+            tmp = yf.download(
                 tickers=symbols,
                 start=start_date,
                 interval='1d',
                 group_by='ticker',
                 auto_adjust=True
             )
+            
+            # For each symbol and each date, if 'Open' is NaN, fill OHLC from previous day's Close
+            for symbol in symbols:
+                if symbol not in tmp.columns.levels[0]:
+                    continue  # Symbol entirely missing in returned data
+                for idx in tmp.index:
+                    if pd.isna(tmp.loc[idx, (symbol, 'Open')]):
+                        current_pos = tmp.index.get_loc(idx)
+                        if current_pos > 0:  # There's a prior day to copy from
+                            prior_idx = tmp.index[current_pos - 1]
+                            prior_close = tmp.loc[prior_idx, (symbol, 'Close')]
+                            tmp.loc[idx, (symbol, 'Open')] = prior_close
+                            tmp.loc[idx, (symbol, 'High')] = prior_close
+                            tmp.loc[idx, (symbol, 'Low')] = prior_close
+                            tmp.loc[idx, (symbol, 'Close')] = prior_close
+                            tmp.loc[idx, (symbol, 'Volume')] = 0
 
-            # Handle single vs multiple symbols
-            if len(symbols) == 1:
-                close_data = pd.DataFrame({'Close': data['Close']})
-            else:
-                close_data = data.xs('Close', axis=1, level=1)
-
-            all_data = pd.concat([all_data, close_data], axis=1)
-
-            # Find missing symbols
-            fetched_symbols = all_data.columns.tolist()
-            missing_symbols = [symbol for symbol in symbols if symbol not in fetched_symbols]
-
-            if not missing_symbols:
-                return all_data.round(2)  # Return if no missing data
-
-            symbols = missing_symbols  # Retry only for missing symbols
-
-            print(f"Retrying for missing symbols: {missing_symbols}")
-
+            data = tmp
+            break  # Successfully downloaded and processed
         except Exception as e:
-            print(f"Attempt {attempt + 1} failed: {str(e)}")
-            continue
-    print(all_data)
-    return all_data.round(2)  # Return whatever data was fetched
+            print(f"Attempt {attempt + 1} failed for {symbols}: {e}")
+            time.sleep(2)
+
+    if data is not None and not data.empty:
+        # Extract just the "Close" columns, which creates a 2D DataFrame
+        # with date as index and each symbol as its own column.
+        close_data = data.xs('Close', axis=1, level=1)
+        close_data = close_data.round(2)
+        return close_data
+    else:
+        # If we never got data or it's empty, return an empty DataFrame
+        return pd.DataFrame()
+
+
 
 
 def build_portfolio_dataframe(stock_data, positions):
@@ -176,17 +195,6 @@ if positions:
                     st.markdown(f"<h3 style='text-align: right'>${row['Dollar Amount Return']:.2f}</h3>",
                                 unsafe_allow_html=True)
                 st.divider()
-
-        with tab2:
-            st.header("Portfolio Details")
-            for player in portfolio_df['Player'].unique():
-                st.subheader(player)
-                player_portfolio = portfolio_df[portfolio_df['Player'] == player]
-                st.dataframe(player_portfolio)
-
-        with tab3:
-            st.header("Performance Charts")
-
             st.subheader("Historical Dollar Returns Over Time")
             if not historical_df.empty:
                 fig_line = px.line(
@@ -194,22 +202,61 @@ if positions:
                     x='Date',
                     y='Dollar Value',
                     color='Player',
-                    title='Historical Dollar Values Over Time',
                     labels={'Date': 'Date', 'Dollar Value': 'Total Portfolio Value ($)'}
                 )
                 fig_line.update_traces(mode='lines+markers')
                 st.plotly_chart(fig_line, use_container_width=True)
 
-            st.subheader("Total Dollar Returns by Player")
+        with tab2:
+            st.header("Portfolio Details")
+            for player in portfolio_df['Player'].unique():
+                st.subheader(player)
+                player_portfolio = portfolio_df[portfolio_df['Player'] == player]
+                desired_columns = [
+                                        'Stock',
+                                        'Entry Price',
+                                        'Current Price',
+                                        'Shares',
+                                        'Current Value ($)',
+                                        'Dollar Amount Return'
+                                    ]
+                player_portfolio = player_portfolio[desired_columns]
+                player_portfolio[' '] = np.where(player_portfolio['Dollar Amount Return'] > 0, '💸','📉' )
+                #st.dataframe(player_portfolio.reset_index(drop=True))
+                st.dataframe(player_portfolio.reset_index(drop=True), hide_index=True)
+
+
+
+        with tab3:
+            st.header("Portfolio Returns")
+
+
+
+            st.subheader("Total Dollar Returns by Stock")
             fig_bar = px.bar(
                 portfolio_df,
                 x='Player',
                 y='Dollar Amount Return',
-                title='Total Dollar Returns by Player',
                 labels={'Player': 'Player', 'Dollar Amount Return': 'Dollar Return'},
                 color='Dollar Amount Return',
-                color_continuous_scale=['red', 'green']
+                color_continuous_scale=[[0, 'red'], [0.5, 'red'], [0.5, 'green'], [1, 'green']],
+                hover_data={
+                    'Stock': True,
+                    'Dollar Amount Return': ':.2f'
+                }
             )
+
+            # Update the color scale midpoint
+            fig_bar.update_coloraxes(cmid=0)
+
+            # Add thicker borders and text labels
+            fig_bar.update_traces(
+                textposition='inside',
+                text=portfolio_df['Stock'],
+                marker_line_width=2,
+                marker_line_color='black'
+            )
+
             st.plotly_chart(fig_bar, use_container_width=True)
 else:
     st.warning("No positions found in the database. Please add some positions first.")
