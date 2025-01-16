@@ -200,9 +200,10 @@ if positions:
                     x='Date',
                     y='Dollar Value',
                     color='Player',
-                    labels={'Date': 'Date', 'Dollar Value': 'Total Portfolio Value ($)'}
+                    labels={'Date': 'Date'}
                 )
-                fig_line.update_traces(mode='lines+markers')
+                fig_line.update_yaxes(showticklabels=False,visible=False)
+                fig_line.update_traces(mode='lines')
                 st.plotly_chart(fig_line, use_container_width=True)
 
         with tab2:
