@@ -1,0 +1,14 @@
+services:
+  etf_game:
+    build: .
+    container_name: etf_game
+    restart: unless-stopped
+
+    environment:
+      - ETF_DB_PATH=/data/portfolios.db
+
+    ports:
+      - "127.0.0.1:8502:8501"
+
+    volumes:
+      - ./data:/data

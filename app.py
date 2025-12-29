@@ -18,13 +18,23 @@ st.set_page_config(
 if st.sidebar.button('🔄 Refresh Data'):
     st.cache_data.clear()
     st.rerun()
+import os
 
 
-# Database connection
+
+import os
+import time
+
+DB_PATH = os.environ.get("ETF_DB_PATH", "/data/portfolios.db")
+DB_PATH = "data/portfolios.db"
+
 def get_db_connection():
-    conn = sqlite3.connect('portfolios.db')
+    conn = sqlite3.connect(DB_PATH)
+    #foo
     conn.row_factory = sqlite3.Row
     return conn
+
+
 
 
 # Create tables if they don't exist
